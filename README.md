@@ -22,6 +22,12 @@
   <a href="https://www.bilinote.app/"><b>🚀 BiliNote Pro · 在线版</b></a>
 </p>
 
+> **BiliNote-custom**: This public repository is a customized build based on
+> [JefferyHcool/BiliNote](https://github.com/JefferyHcool/BiliNote). It keeps
+> the upstream MIT license and adds local changes for Bilibili cookie refresh,
+> resumable/streaming note generation previews, faster task polling, and
+> deployment configuration examples.
+
 <p align="center">
   <b>不想折腾部署？</b>访问 <a href="https://www.bilinote.app/"><b>www.bilinote.app</b></a> 即开即用 —— 免安装、免配置环境、免下模型，注册即可把视频转成笔记。
   <br/>

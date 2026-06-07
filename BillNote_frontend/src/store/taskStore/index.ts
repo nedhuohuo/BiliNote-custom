@@ -41,6 +41,7 @@ export interface Markdown {
 export interface Task {
   id: string
   markdown: string|Markdown [] //为了兼容之前的笔记
+  partialMarkdown?: string
   transcript: Transcript
   status: TaskStatus
   audioMeta: AudioMeta
@@ -83,6 +84,7 @@ export const useTaskStore = create<TaskStore>()(
               id: taskId,
               status: 'PENDING',
               markdown: '',
+              partialMarkdown: '',
               platform: platform,
               transcript: {
                 full_text: '',
@@ -145,6 +147,7 @@ export const useTaskStore = create<TaskStore>()(
                 return {
                   ...task,
                   ...data,
+                  partialMarkdown: '',
                   markdown: updatedMarkdown,
                 }
               }

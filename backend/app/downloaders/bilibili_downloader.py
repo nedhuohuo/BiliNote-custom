@@ -22,8 +22,24 @@ class BilibiliDownloader(Downloader, ABC):
     def __init__(self):
         super().__init__()
         self._cookie_mgr = CookieConfigManager()
-        self._cookie = self._cookie_mgr.get('bilibili')
+        self._cookie = None
+        self._cookiefile = None
+        self._refresh_cookiefile()
+
+    def _refresh_cookiefile(self) -> Optional[str]:
+        cookie = self._cookie_mgr.get('bilibili')
+        if cookie == self._cookie and self._cookiefile:
+            return self._cookiefile
+
+        if self._cookiefile:
+            try:
+                os.remove(self._cookiefile)
+            except OSError:
+                pass
+
+        self._cookie = cookie
         self._cookiefile = self._write_netscape_cookie_file()
+        return self._cookiefile
 
     def _write_netscape_cookie_file(self) -> Optional[str]:
         """将 Cookie 写入 Netscape 格式临时文件，返回文件路径（供 yt-dlp cookiefile 使用）"""
@@ -46,7 +62,8 @@ class BilibiliDownloader(Downloader, ABC):
         video_url: str,
         output_dir: Union[str, None] = None,
         quality: DownloadQuality = "fast",
-        need_video:Optional[bool]=False
+        need_video: Optional[bool] = False,
+        skip_download: bool = False,
     ) -> AudioDownloadResult:
         if output_dir is None:
             output_dir = get_data_dir()
@@ -60,21 +77,25 @@ class BilibiliDownloader(Downloader, ABC):
             'format': 'bestaudio[ext=m4a]/bestaudio/best',
             'outtmpl': output_path,
             'http_headers': {'Referer': 'https://www.bilibili.com'},
-            'postprocessors': [
+            'noplaylist': True,
+            'quiet': False,
+        }
+        if skip_download:
+            ydl_opts['skip_download'] = True
+        else:
+            ydl_opts['postprocessors'] = [
                 {
                     'key': 'FFmpegExtractAudio',
                     'preferredcodec': 'mp3',
                     'preferredquality': '64',
                 }
-            ],
-            'noplaylist': True,
-            'quiet': False,
-        }
-        if self._cookiefile:
-            ydl_opts['cookiefile'] = self._cookiefile
+            ]
+        cookiefile = self._refresh_cookiefile()
+        if cookiefile:
+            ydl_opts['cookiefile'] = cookiefile
 
         with yt_dlp.YoutubeDL(ydl_opts) as ydl:
-            info = ydl.extract_info(video_url, download=True)
+            info = ydl.extract_info(video_url, download=not skip_download)
             video_id = info.get("id")
             title = info.get("title")
             duration = info.get("duration", 0)
@@ -123,8 +144,9 @@ class BilibiliDownloader(Downloader, ABC):
             'quiet': False,
             'merge_output_format': 'mp4',  # 确保合并成 mp4
         }
-        if self._cookiefile:
-            ydl_opts['cookiefile'] = self._cookiefile
+        cookiefile = self._refresh_cookiefile()
+        if cookiefile:
+            ydl_opts['cookiefile'] = cookiefile
 
         with yt_dlp.YoutubeDL(ydl_opts) as ydl:
             info = ydl.extract_info(video_url, download=True)
@@ -187,8 +209,9 @@ class BilibiliDownloader(Downloader, ABC):
         }
 
         # 通过 CookieConfigManager 注入 B站 Cookie（Netscape cookiefile）
-        if self._cookiefile:
-            ydl_opts['cookiefile'] = self._cookiefile
+        cookiefile = self._refresh_cookiefile()
+        if cookiefile:
+            ydl_opts['cookiefile'] = cookiefile
             ydl_opts['http_headers'] = {'Referer': 'https://www.bilibili.com'}
 
         try:

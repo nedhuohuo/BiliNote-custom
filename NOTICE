@@ -1,0 +1,11 @@
+BiliNote-custom
+
+This repository is a modified distribution of BiliNote:
+https://github.com/JefferyHcool/BiliNote
+
+The upstream project is licensed under the MIT License. This repository keeps
+the MIT License and preserves the original copyright notice in LICENSE.
+
+Local modifications include Bilibili cookie refresh handling, resumable and
+streaming note-generation previews, frontend partial-markdown rendering during
+summarization, and additional deployment configuration examples.

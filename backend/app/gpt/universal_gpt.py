@@ -13,7 +13,7 @@ from app.gpt.utils import fix_markdown
 from app.gpt.request_chunker import RequestChunker
 from app.models.transcriber_model import TranscriptSegment
 from datetime import timedelta
-from typing import List
+from typing import Callable, List
 
 
 class UniversalGPT(GPT):
@@ -214,6 +214,59 @@ class UniversalGPT(GPT):
                 )
             raise
 
+    def _do_create_stream(self, messages: list):
+        """单次流式调用，返回 SDK stream iterator。"""
+        try:
+            return self.client.chat.completions.create(
+                model=self.model,
+                messages=messages,
+                temperature=self.temperature,
+                stream=True,
+            )
+        except Exception as exc:
+            if self._is_temperature_unsupported_error(exc):
+                print(f"[universal_gpt] 模型 {self.model} 不支持自定义 temperature，改用默认值重试")
+                return self.client.chat.completions.create(
+                    model=self.model,
+                    messages=messages,
+                    stream=True,
+                )
+            raise
+
+    @staticmethod
+    def _content_from_stream_event(event) -> str:
+        choices = getattr(event, "choices", None) or []
+        if not choices:
+            return ""
+        delta = getattr(choices[0], "delta", None)
+        return getattr(delta, "content", None) or ""
+
+    def _collect_stream_text(
+        self,
+        stream,
+        on_snapshot: Callable[[str, str], None] | None = None,
+        snapshot_prefix: str = "",
+        phase: str = "summarize",
+    ) -> str:
+        parts = []
+        last_snapshot_at = 0.0
+        last_snapshot_chars = 0
+        for event in stream:
+            content = self._content_from_stream_event(event)
+            if content:
+                parts.append(content)
+                if on_snapshot:
+                    current_text = snapshot_prefix + "".join(parts)
+                    now = time.monotonic()
+                    if now - last_snapshot_at >= 0.5 or len(current_text) - last_snapshot_chars >= 200:
+                        on_snapshot(current_text, phase)
+                        last_snapshot_at = now
+                        last_snapshot_chars = len(current_text)
+        text = "".join(parts).strip()
+        if on_snapshot and text:
+            on_snapshot(snapshot_prefix + text, phase)
+        return text
+
     def _chat_completion_create(self, messages: list):
         last_exc = None
         for attempt in range(self._max_retry_attempts):
@@ -230,7 +283,40 @@ class UniversalGPT(GPT):
             raise last_exc
         raise RuntimeError("chat completion failed without exception")
 
-    def _merge_partials(self, partials: list, checkpoint_key: str | None, source_signature: str | None) -> str:
+    def _chat_completion_text(
+        self,
+        messages: list,
+        on_snapshot: Callable[[str, str], None] | None = None,
+        snapshot_prefix: str = "",
+        phase: str = "summarize",
+    ) -> str:
+        last_exc = None
+        for attempt in range(self._max_retry_attempts):
+            try:
+                return self._collect_stream_text(
+                    self._do_create_stream(messages),
+                    on_snapshot=on_snapshot,
+                    snapshot_prefix=snapshot_prefix,
+                    phase=phase,
+                )
+            except Exception as exc:
+                last_exc = exc
+                if attempt == self._max_retry_attempts - 1 or not self._is_retryable_error(exc):
+                    raise
+                sleep_seconds = self._retry_base_backoff * (2 ** attempt)
+                time.sleep(sleep_seconds)
+
+        if last_exc is not None:
+            raise last_exc
+        raise RuntimeError("chat completion failed without exception")
+
+    def _merge_partials(
+        self,
+        partials: list,
+        checkpoint_key: str | None,
+        source_signature: str | None,
+        on_snapshot: Callable[[str, str], None] | None = None,
+    ) -> str:
         def build_messages(texts, *_args, **_kwargs):
             return self._build_merge_messages(texts)
 
@@ -247,13 +333,17 @@ class UniversalGPT(GPT):
             for group_idx, group in enumerate(groups):
                 messages = build_messages(group)
                 try:
-                    response = self._chat_completion_create(messages)
+                    text = self._chat_completion_text(
+                        messages,
+                        on_snapshot=on_snapshot,
+                        phase="merge",
+                    )
                 except Exception as exc:
                     if checkpoint_key and source_signature:
                         self._save_checkpoint(checkpoint_key, source_signature, current_partials, "merge")
                     raise
 
-                new_partials.append(response.choices[0].message.content.strip())
+                new_partials.append(text)
 
                 if checkpoint_key and source_signature:
                     remaining_partials = []
@@ -266,7 +356,12 @@ class UniversalGPT(GPT):
 
         return current_partials[0]
 
-    def summarize(self, source: GPTSource) -> str:
+    def summarize(
+        self,
+        source: GPTSource,
+        on_delta: Callable[[str], None] | None = None,
+        on_snapshot: Callable[[str, str], None] | None = None,
+    ) -> str:
         self.screenshot = source.screenshot
         self.link = source.link
         source.segment = self.ensure_segments_type(source.segment)
@@ -309,6 +404,9 @@ class UniversalGPT(GPT):
             partials = []
 
         for chunk in chunks[len(partials):]:
+            snapshot_prefix = "\n\n---\n\n".join(partials)
+            if snapshot_prefix:
+                snapshot_prefix += "\n\n---\n\n"
             messages = self.create_messages(
                 chunk.segments,
                 title=source.title,
@@ -319,13 +417,22 @@ class UniversalGPT(GPT):
                 extras=source.extras
             )
             try:
-                response = self._chat_completion_create(messages)
+                text = self._chat_completion_text(
+                    messages,
+                    on_snapshot=on_snapshot,
+                    snapshot_prefix=snapshot_prefix,
+                    phase="summarize",
+                )
             except Exception as exc:
                 if checkpoint_key and source_signature:
                     self._save_checkpoint(checkpoint_key, source_signature, partials, "summarize")
                 raise
 
-            partials.append(response.choices[0].message.content.strip())
+            partials.append(text)
+            if on_delta:
+                on_delta(text)
+            if on_snapshot:
+                on_snapshot("\n\n---\n\n".join(partials), "summarize")
             if checkpoint_key and source_signature:
                 self._save_checkpoint(checkpoint_key, source_signature, partials, "summarize")
 
@@ -333,7 +440,7 @@ class UniversalGPT(GPT):
             if checkpoint_key:
                 self._clear_checkpoint(checkpoint_key)
             return partials[0]
-        merged = self._merge_partials(partials, checkpoint_key, source_signature)
+        merged = self._merge_partials(partials, checkpoint_key, source_signature, on_snapshot=on_snapshot)
         if checkpoint_key:
             self._clear_checkpoint(checkpoint_key)
         return merged

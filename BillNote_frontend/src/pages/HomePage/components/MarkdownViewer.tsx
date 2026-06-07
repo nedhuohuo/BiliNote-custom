@@ -325,6 +325,7 @@ const MarkdownViewer: FC<MarkdownViewerProps> = memo(({ status }) => {
   const getCurrentTask = useTaskStore.getState().getCurrentTask
   const currentTask = useTaskStore(state => state.getCurrentTask())
   const taskStatus = currentTask?.status || 'PENDING'
+  const partialMarkdown = currentTask?.partialMarkdown || ''
   const retryTask = useTaskStore.getState().retryTask
   const isMultiVersion = Array.isArray(currentTask?.markdown)
   const [showTranscribe, setShowTranscribe] = useState(false)
@@ -416,6 +417,34 @@ const MarkdownViewer: FC<MarkdownViewerProps> = memo(({ status }) => {
   }
 
   if (status === 'loading') {
+    if (taskStatus === 'SUMMARIZING' && partialMarkdown.trim()) {
+      return (
+        <div className="flex h-screen w-full flex-col overflow-hidden bg-white">
+          <div className="shrink-0 border-b bg-white px-6 py-5">
+            <StepBar steps={steps} currentStep={taskStatus} />
+            <div className="mt-5 flex items-center justify-between text-sm text-neutral-500">
+              <div className="flex items-center gap-2">
+                <Loading className="h-4 w-4" />
+                <span className="font-medium text-neutral-700">正在总结内容</span>
+              </div>
+              <span>已生成 {partialMarkdown.length.toLocaleString()} 字</span>
+            </div>
+          </div>
+          <ScrollArea className="min-h-0 flex-1">
+            <div className="markdown-body w-full px-6 py-4">
+              <ReactMarkdown
+                remarkPlugins={remarkPlugins}
+                rehypePlugins={rehypePlugins}
+                components={markdownComponents}
+              >
+                {partialMarkdown.replace(/^>\s*来源链接：[^\n]*\n*/m, '')}
+              </ReactMarkdown>
+            </div>
+          </ScrollArea>
+        </div>
+      )
+    }
+
     return (
       <div className="flex h-screen w-full flex-col items-center justify-center space-y-4 text-neutral-500">
         <StepBar steps={steps} currentStep={taskStatus} />

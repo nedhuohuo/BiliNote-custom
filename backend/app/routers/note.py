@@ -72,6 +72,31 @@ NOTE_OUTPUT_DIR = os.getenv("NOTE_OUTPUT_DIR", "note_results")
 UPLOAD_DIR = "uploads"
 
 
+def _load_stream_preview(task_id: str) -> dict:
+    stream_path = os.path.join(NOTE_OUTPUT_DIR, f"{task_id}.stream.json")
+    if not os.path.exists(stream_path):
+        return {}
+
+    try:
+        with open(stream_path, "r", encoding="utf-8") as f:
+            data = json.load(f)
+    except Exception as exc:
+        logger.warning(f"读取流式预览失败 (task_id={task_id}): {exc}")
+        return {}
+
+    partial_markdown = data.get("partial_markdown") or ""
+    return {
+        "partial_markdown": partial_markdown,
+        "stream": {
+            "phase": data.get("phase"),
+            "char_count": data.get("char_count", len(partial_markdown)),
+            "updated_at": data.get("updated_at"),
+            "done": data.get("done", False),
+            **({"error": data["error"]} if data.get("error") else {}),
+        },
+    }
+
+
 def save_note_to_file(task_id: str, note):
     os.makedirs(NOTE_OUTPUT_DIR, exist_ok=True)
     with open(os.path.join(NOTE_OUTPUT_DIR, f"{task_id}.json"), "w", encoding="utf-8") as f:
@@ -270,11 +295,13 @@ def get_task_status(task_id: str):
             return R.error(message or "任务失败", code=500)
 
         # 处理中状态
-        return R.success({
+        payload = {
             "status": status,
             "message": message,
             "task_id": task_id
-        })
+        }
+        payload.update(_load_stream_preview(task_id))
+        return R.success(payload)
 
     # 没有状态文件，但有结果
     if os.path.exists(result_path):
@@ -287,11 +314,13 @@ def get_task_status(task_id: str):
         })
 
     # 什么都没有，默认PENDING
-    return R.success({
+    payload = {
         "status": TaskStatus.PENDING.value,
         "message": "任务排队中",
         "task_id": task_id
-    })
+    }
+    payload.update(_load_stream_preview(task_id))
+    return R.success(payload)
 
 
 @router.get("/image_proxy")

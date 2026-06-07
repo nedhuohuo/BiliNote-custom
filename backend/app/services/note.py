@@ -2,6 +2,7 @@ import json
 import logging
 import os
 from dataclasses import asdict
+from datetime import datetime, timezone
 from pathlib import Path
 from typing import List, Optional, Tuple, Union, Any
 
@@ -57,6 +58,41 @@ IMAGE_BASE_URL = os.getenv("IMAGE_BASE_URL", "/static/screenshots")
 # 日志配置
 logger = logging.getLogger(__name__)
 logger.setLevel(logging.INFO)
+
+
+class StreamPreviewWriter:
+    def __init__(self, task_id: Optional[str]):
+        self.task_id = task_id
+        self.path = NOTE_OUTPUT_DIR / f"{task_id}.stream.json" if task_id else None
+
+    def write(
+        self,
+        partial_markdown: str,
+        phase: str = "summarize",
+        done: bool = False,
+        error: Optional[str] = None,
+    ) -> None:
+        if not self.task_id or not self.path:
+            return
+
+        payload = {
+            "task_id": self.task_id,
+            "phase": phase,
+            "partial_markdown": partial_markdown or "",
+            "char_count": len(partial_markdown or ""),
+            "updated_at": datetime.now(timezone.utc).isoformat(),
+            "done": done,
+        }
+        if error:
+            payload["error"] = error
+
+        try:
+            NOTE_OUTPUT_DIR.mkdir(parents=True, exist_ok=True)
+            temp_path = self.path.with_suffix(".stream.tmp")
+            temp_path.write_text(json.dumps(payload, ensure_ascii=False, indent=2), encoding="utf-8")
+            temp_path.replace(self.path)
+        except Exception as exc:
+            logger.warning(f"写入流式预览失败 (task_id={self.task_id}): {exc}")
 
 
 class NoteGenerator:
@@ -205,6 +241,7 @@ class NoteGenerator:
                 transcript=transcript,
                 gpt=gpt,
                 markdown_cache_file=markdown_cache_file,
+                task_id=task_id,
                 link=link,
                 screenshot=screenshot,
                 formats=_format or [],
@@ -571,6 +608,7 @@ class NoteGenerator:
         transcript: TranscriptResult,
         gpt: GPT,
         markdown_cache_file: Path,
+        task_id: Optional[str],
         link: bool,
         screenshot: bool,
         formats: List[str],
@@ -592,8 +630,8 @@ class NoteGenerator:
         :param extras: GPT 额外参数
         :return: 生成的 Markdown 字符串
         """
-        task_id = markdown_cache_file.stem
-        self._update_status(task_id, TaskStatus.SUMMARIZING)
+        status_task_id = task_id or markdown_cache_file.stem.replace("_markdown", "")
+        self._update_status(status_task_id, TaskStatus.SUMMARIZING)
 
         source = GPTSource(
             title=audio_meta.title,
@@ -605,16 +643,24 @@ class NoteGenerator:
             _format=formats,
             style=style,
             extras=extras,
-            checkpoint_key=task_id,
+            checkpoint_key=markdown_cache_file.stem,
         )
 
+        preview_writer = StreamPreviewWriter(status_task_id)
+
         try:
-            markdown = gpt.summarize(source)
+            preview_writer.write("", phase="summarize")
+            markdown = gpt.summarize(
+                source,
+                on_snapshot=lambda text, phase="summarize": preview_writer.write(text, phase=phase),
+            )
             markdown_cache_file.write_text(markdown, encoding="utf-8")
+            preview_writer.write(markdown, phase="done", done=True)
             logger.info(f"GPT 总结并缓存成功 ({markdown_cache_file})")
             return markdown
         except Exception as exc:
             logger.error(f"GPT 总结失败：{exc}")
+            preview_writer.write("", phase="error", done=True, error=str(exc))
             self._handle_exception(task_id, exc)
             raise
 

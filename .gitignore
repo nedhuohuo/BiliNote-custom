@@ -324,6 +324,23 @@ cython_debug/
 /BiliNote_frontend/.idea/*
 /BiliNote_frontend/src-tauri/bin/
 
+# BiliNote runtime outputs
+note_results/
+*.gpt.checkpoint.json
+*.stream.json
+*.stream.tmp
+uploads/
+static/screenshots/
+backend/note_results/
+backend/uploads/
+backend/static/screenshots/
+*.mp3
+*.mp4
+*.m4a
+*.wav
+*.srt
+*.json3
+
 # FFmpeg 构建文件（不应该提交到仓库）
 ffmpeg*/
 ffmpg*/
